@@ -1,0 +1,12 @@
+name = "earnings-mcp-server"
+main = "src/worker.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+EARNINGS_API_URL = "https://pf.bforecast.com"
+
+# Note: Set these secrets via `wrangler secret put`
+# MCP_SHARED_SECRET = "your_secret"
+
+[ai]
+binding = "AI"
