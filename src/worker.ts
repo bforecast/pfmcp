@@ -454,15 +454,51 @@ async function handleMcpRequest(env: Env, body: any): Promise<any> {
     }
 }
 
+// Session store for SSE streams (ephemeral, resets on cold start)
+// Key: sessionId, Value: { writer, encoder, created }
+const sessions = new Map<string, {
+    writer: WritableStreamDefaultWriter<Uint8Array>;
+    encoder: TextEncoder;
+    created: number;
+}>();
+
+// Clean up old sessions (older than 30 minutes)
+function cleanupSessions() {
+    const now = Date.now();
+    const maxAge = 30 * 60 * 1000; // 30 minutes
+    for (const [id, session] of sessions) {
+        if (now - session.created > maxAge) {
+            try { session.writer.close(); } catch { }
+            sessions.delete(id);
+        }
+    }
+}
+
+// Send SSE event to a session
+async function sendSSEEvent(sessionId: string, event: string, data: any) {
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+
+    try {
+        const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+        await session.writer.write(session.encoder.encode(message));
+        return true;
+    } catch {
+        sessions.delete(sessionId);
+        return false;
+    }
+}
+
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);
 
-        // CORS headers
+        // CORS headers - include MCP session header
         const corsHeaders = {
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type'
+            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id, Authorization',
+            'Access-Control-Expose-Headers': 'mcp-session-id'
         };
 
         // CORS preflight
@@ -475,7 +511,8 @@ export default {
             return new Response(JSON.stringify({
                 status: 'healthy',
                 server: 'earnings-mcp-server',
-                version: '1.0.0',
+                version: '2.0.0',
+                transport: 'streamable-http',
                 endpoints: { mcp: '/mcp', tools: '/tools' }
             }), {
                 headers: { 'Content-Type': 'application/json', ...corsHeaders }
@@ -489,39 +526,125 @@ export default {
             });
         }
 
-        // MCP endpoint (GET - helpful message)
-        if (url.pathname === '/mcp' && request.method === 'GET') {
-            return new Response('MCP Server is running. Please use POST with JSON-RPC payload.', {
-                status: 405, // Method Not Allowed
-                headers: corsHeaders
-            });
-        }
+        // ============================================================
+        // MCP Streamable HTTP Transport
+        // ============================================================
 
-        // MCP endpoint (POST)
-        if (url.pathname === '/mcp' && request.method === 'POST') {
-            let bodyText = "";
-            try {
-                bodyText = await request.text();
-                if (!bodyText) throw new Error("Empty body");
+        if (url.pathname === '/mcp') {
+            const sessionId = request.headers.get('mcp-session-id');
 
-                const body = JSON.parse(bodyText);
-                const result = await handleMcpRequest(env, body);
-                return new Response(JSON.stringify(result), {
-                    headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            // ----------------------------------------------------------
+            // GET /mcp - Establish SSE stream for server notifications
+            // ----------------------------------------------------------
+            if (request.method === 'GET') {
+                cleanupSessions();
+
+                // If no session ID, create new session
+                const newSessionId = sessionId || crypto.randomUUID();
+
+                const { readable, writable } = new TransformStream<Uint8Array>();
+                const writer = writable.getWriter();
+                const encoder = new TextEncoder();
+
+                // Store session
+                sessions.set(newSessionId, { writer, encoder, created: Date.now() });
+
+                // Send initial connection event
+                const initMessage = `event: open\ndata: {"sessionId":"${newSessionId}"}\n\n`;
+                writer.write(encoder.encode(initMessage));
+
+                return new Response(readable, {
+                    headers: {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive',
+                        'mcp-session-id': newSessionId,
+                        ...corsHeaders
+                    }
                 });
-            } catch (error) {
-                return new Response(JSON.stringify({
-                    jsonrpc: '2.0',
-                    error: {
-                        code: -32700,
-                        message: `Parse error: ${error instanceof Error ? error.message : String(error)}. Received: ${bodyText.substring(0, 50)}...`
-                    },
-                    id: null
-                }), {
-                    status: 400,
+            }
+
+            // ----------------------------------------------------------
+            // POST /mcp - Handle JSON-RPC requests
+            // ----------------------------------------------------------
+            if (request.method === 'POST') {
+                let bodyText = "";
+                try {
+                    bodyText = await request.text();
+                    if (!bodyText) throw new Error("Empty body");
+
+                    const body = JSON.parse(bodyText);
+
+                    // Generate or use existing session ID
+                    const responseSessionId = sessionId || crypto.randomUUID();
+
+                    // Check if this is a notification (no id field)
+                    const isNotification = body.id === undefined || body.id === null;
+
+                    if (isNotification) {
+                        // Handle notification - no response needed
+                        // Common notifications: notifications/initialized, notifications/cancelled
+                        return new Response(null, {
+                            status: 202, // Accepted
+                            headers: {
+                                'mcp-session-id': responseSessionId,
+                                ...corsHeaders
+                            }
+                        });
+                    }
+
+                    const result = await handleMcpRequest(env, body);
+
+                    // For long-running tools, we could stream the response
+                    // For now, return standard JSON response
+                    return new Response(JSON.stringify(result), {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'mcp-session-id': responseSessionId,
+                            ...corsHeaders
+                        }
+                    });
+                } catch (error) {
+                    return new Response(JSON.stringify({
+                        jsonrpc: '2.0',
+                        error: {
+                            code: -32700,
+                            message: `Parse error: ${error instanceof Error ? error.message : String(error)}`
+                        },
+                        id: null
+                    }), {
+                        status: 400,
+                        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+                    });
+                }
+            }
+
+            // ----------------------------------------------------------
+            // DELETE /mcp - Close session
+            // ----------------------------------------------------------
+            if (request.method === 'DELETE') {
+                if (sessionId && sessions.has(sessionId)) {
+                    const session = sessions.get(sessionId);
+                    try { session?.writer.close(); } catch { }
+                    sessions.delete(sessionId);
+                    return new Response(null, {
+                        status: 204,
+                        headers: corsHeaders
+                    });
+                }
+                return new Response(JSON.stringify({ error: 'Session not found' }), {
+                    status: 404,
                     headers: { 'Content-Type': 'application/json', ...corsHeaders }
                 });
             }
+
+            // Method not allowed
+            return new Response(JSON.stringify({
+                error: 'Method not allowed. Use GET (SSE), POST (requests), or DELETE (close session)'
+            }), {
+                status: 405,
+                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            });
         }
 
         return new Response('Not Found', { status: 404, headers: corsHeaders });

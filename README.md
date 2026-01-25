@@ -51,6 +51,66 @@ npx @modelcontextprotocol/inspector node dist/index.js
 node dist/index.js
 ```
 
+## Remote MCP Connection (Recommended)
+
+Connect directly to the deployed worker without `bridge.js` - just like Context7 MCP:
+
+### Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "earnings": {
+      "url": "https://earnings-mcp-server.brilliantforecast.workers.dev/mcp",
+      "transport": "sse"
+    }
+  }
+}
+```
+
+### Antigravity
+
+Add to your `mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "earnings": {
+      "serverUrl": "https://earnings-mcp-server.brilliantforecast.workers.dev/mcp"
+    }
+  }
+}
+```
+
+### With Authentication (Optional)
+
+#### Antigravity
+```json
+{
+  "mcpServers": {
+    "earnings": {
+      "serverUrl": "https://earnings-mcp-server.brilliantforecast.workers.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY"
+      }
+    }
+  }
+}
+```
+
+### Transport Details
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/mcp` | GET | SSE stream for server notifications |
+| `/mcp` | POST | JSON-RPC requests |
+| `/mcp` | DELETE | Close session |
+| `/health` | GET | Health check |
+| `/tools` | GET | List available tools |
+
+
 ## Available Tools
 
 | Tool | Description |

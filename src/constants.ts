@@ -5,7 +5,7 @@ export function getEarningsApiUrl(): string {
 
 
 
-export const CLOUDFLARE_AI_MODEL = '@cf/meta/llama-3.1-8b-instruct';
+export const CLOUDFLARE_AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8';
 
 // Response limits
 export const CHARACTER_LIMIT = 25000;
