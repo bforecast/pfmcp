@@ -43,9 +43,9 @@ const TOOLS = [
             type: "object",
             properties: {
                 group_id: { type: "number", description: "Portfolio ID" },
+                portfolio_name: { type: "string", description: "Portfolio Name (fuzzy match) if ID not known" },
                 response_format: { type: "string", enum: ["markdown", "json"], default: "markdown" }
-            },
-            required: ["group_id"]
+            }
         }
     },
     {
@@ -55,9 +55,9 @@ const TOOLS = [
             type: "object",
             properties: {
                 group_id: { type: "number", description: "Portfolio ID" },
+                portfolio_name: { type: "string", description: "Portfolio Name (fuzzy match) if ID not known" },
                 response_format: { type: "string", enum: ["markdown", "json"], default: "markdown" }
-            },
-            required: ["group_id"]
+            }
         }
     },
     {
@@ -105,9 +105,9 @@ const TOOLS = [
             type: "object",
             properties: {
                 group_id: { type: "number", description: "Portfolio ID" },
+                portfolio_name: { type: "string", description: "Portfolio Name (fuzzy match) if ID not known" },
                 question: { type: "string", description: "Optional specific question" }
-            },
-            required: ["group_id"]
+            }
         }
     },
     {
@@ -157,6 +157,14 @@ const TOOLS = [
             },
             required: ["symbol"]
         }
+    },
+    {
+        name: "earnings_get_health",
+        description: "Check connectivity to the earnings backend API",
+        inputSchema: {
+            type: "object",
+            properties: {}
+        }
     }
 ];
 
@@ -200,6 +208,32 @@ function formatPercent(val: number | undefined | null): string {
     return (isPercent ? val : val * 100).toFixed(1) + '%';
 }
 
+// Helper to resolve portfolio ID from ID or Name
+async function resolvePortfolioId(env: Env, args: any): Promise<{ id: number; name: string } | null> {
+    if (args.group_id) {
+        return { id: Number(args.group_id), name: `Portfolio ${args.group_id}` };
+    }
+
+    if (args.portfolio_name) {
+        const nameQuery = args.portfolio_name.toLowerCase();
+        const data = await apiRequest(env, '/api/portfolios');
+        if (!Array.isArray(data)) return null;
+
+        // Exact match
+        let match = data.find((p: any) => p.name.toLowerCase() === nameQuery);
+        if (match) return { id: match.id, name: match.name };
+
+        // Prefix match
+        match = data.find((p: any) => p.name.toLowerCase().startsWith(nameQuery));
+        if (match) return { id: match.id, name: match.name };
+
+        // Contains match
+        match = data.find((p: any) => p.name.toLowerCase().includes(nameQuery));
+        if (match) return { id: match.id, name: match.name };
+    }
+    return null;
+}
+
 // AI helper
 async function runAI(env: Env, prompt: string): Promise<string> {
     if (!env.AI) {
@@ -234,19 +268,25 @@ async function handleTool(env: Env, name: string, args: any): Promise<string> {
             }
 
             case 'earnings_get_portfolio_holdings': {
-                const data = await apiRequest(env, `/api/dashboard-data?groupId=${args.group_id}`);
+                const resolved = await resolvePortfolioId(env, args);
+                if (!resolved) return 'Error: Please provide a valid group_id or portfolio_name.';
+
+                const data = await apiRequest(env, `/api/dashboard-data?groupId=${resolved.id}`);
                 if (args.response_format === 'json') return JSON.stringify(data, null, 2);
                 const holdings = data.data || [];
-                return `# Portfolio ${args.group_id} Holdings\n\n` +
+                return `# ${resolved.name} Holdings\n\n` +
                     holdings.map((h: any) => {
                         return `- **${h.symbol}**: ${formatPercent(h.allocation)} @ $${h.price?.toFixed(2) || 'N/A'}`;
                     }).join('\n');
             }
 
             case 'earnings_get_portfolio_score': {
-                const data = await apiRequest(env, `/api/scoring/${args.group_id}`);
+                const resolved = await resolvePortfolioId(env, args);
+                if (!resolved) return 'Error: Please provide a valid group_id or portfolio_name.';
+
+                const data = await apiRequest(env, `/api/scoring/${resolved.id}`);
                 if (args.response_format === 'json') return JSON.stringify(data, null, 2);
-                return `# Portfolio Score\n\n**Total**: ${data.total_score?.toFixed(1) || 'N/A'}\n- Holdings: ${data.holdings_score?.toFixed(1)}\n- Performance: ${data.performance_score?.toFixed(1)}`;
+                return `# ${resolved.name} Score\n\n**Total**: ${data.total_score?.toFixed(1) || 'N/A'}\n- Holdings: ${data.holdings_score?.toFixed(1)}\n- Performance: ${data.performance_score?.toFixed(1)}`;
             }
 
             case 'earnings_get_stock_quote':
@@ -262,8 +302,11 @@ async function handleTool(env: Env, name: string, args: any): Promise<string> {
             }
 
             case 'earnings_ai_analyze_portfolio': {
+                const resolved = await resolvePortfolioId(env, args);
+                if (!resolved) return 'Error: Please provide a valid group_id or portfolio_name.';
+
                 const data = await apiRequest(env, `/api/portfolios`);
-                const portfolio = data.find((p: any) => p.id === args.group_id);
+                const portfolio = data.find((p: any) => p.id === resolved.id);
                 if (!portfolio) return 'Portfolio not found';
 
                 const context = `Portfolio: ${portfolio.name}\nID: ${portfolio.id}\nCAGR: ${formatPercent(portfolio.cagr)}\nSharpe: ${portfolio.sharpe?.toFixed(2) || 'N/A'}\nHoldings: ${portfolio.member_count}`;
@@ -403,6 +446,15 @@ Price: $${q.price?.toFixed(2)}
                 return await runAI(env, prompt);
             }
 
+            case 'earnings_get_health': {
+                try {
+                    const data = await apiRequest(env, '/health');
+                    return `Backend Health: ${data.status || 'OK'}`;
+                } catch (error) {
+                    return `Backend Health: Error - ${error instanceof Error ? error.message : String(error)}`;
+                }
+            }
+
             default:
                 return `Unknown tool: ${name}`;
         }
@@ -435,6 +487,20 @@ async function handleMcpRequest(env: Env, body: any): Promise<any> {
             return {
                 jsonrpc: '2.0',
                 result: { tools: TOOLS },
+                id
+            };
+
+        case 'resources/list':
+            return {
+                jsonrpc: '2.0',
+                result: { resources: [] },
+                id
+            };
+
+        case 'resources/read':
+            return {
+                jsonrpc: '2.0',
+                result: { contents: [] },
                 id
             };
 
@@ -537,28 +603,15 @@ export default {
             // GET /mcp - Establish SSE stream for server notifications
             // ----------------------------------------------------------
             if (request.method === 'GET') {
-                cleanupSessions();
-
-                // If no session ID, create new session
-                const newSessionId = sessionId || crypto.randomUUID();
-
-                const { readable, writable } = new TransformStream<Uint8Array>();
-                const writer = writable.getWriter();
-                const encoder = new TextEncoder();
-
-                // Store session
-                sessions.set(newSessionId, { writer, encoder, created: Date.now() });
-
-                // Send initial connection event
-                const initMessage = `event: open\ndata: {"sessionId":"${newSessionId}"}\n\n`;
-                writer.write(encoder.encode(initMessage));
-
-                return new Response(readable, {
+                return new Response(JSON.stringify({
+                    error: "SSE GET transport is not supported on stateless edge workers. Please send JSON-RPC requests via HTTP POST.",
+                    transport: "streamable-http",
+                    supportedMethods: ["POST", "OPTIONS"]
+                }), {
+                    status: 405,
                     headers: {
-                        'Content-Type': 'text/event-stream',
-                        'Cache-Control': 'no-cache',
-                        'Connection': 'keep-alive',
-                        'mcp-session-id': newSessionId,
+                        'Content-Type': 'application/json',
+                        'Allow': 'POST, OPTIONS',
                         ...corsHeaders
                     }
                 });
