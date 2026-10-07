@@ -143,6 +143,10 @@ Add to your `mcp_config.json`:
 npm run dev  # Watch mode with tsx
 ```
 
+## Documentation & Architecture
+
+- [Incident Postmortem: SSE Retry Storm & MCP Protocol Resolution](docs/INCIDENT_POSTMORTEM_SSE_RETRY_STORM.md) - Deep-dive into Serverless edge SSE limits, MCP transport protocol, and retry storm prevention.
+
 ## License
 
 Private - For internal use only.
