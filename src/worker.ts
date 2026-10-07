@@ -606,12 +606,12 @@ export default {
                 return new Response(JSON.stringify({
                     error: "SSE GET transport is not supported on stateless edge workers. Please send JSON-RPC requests via HTTP POST.",
                     transport: "streamable-http",
-                    supportedMethods: ["POST", "OPTIONS"]
+                    supportedMethods: ["POST", "DELETE", "OPTIONS"]
                 }), {
                     status: 405,
                     headers: {
                         'Content-Type': 'application/json',
-                        'Allow': 'POST, OPTIONS',
+                        'Allow': 'POST, DELETE, OPTIONS',
                         ...corsHeaders
                     }
                 });
@@ -673,21 +673,18 @@ export default {
             }
 
             // ----------------------------------------------------------
-            // DELETE /mcp - Close session
+            // DELETE /mcp - Close session (idempotent)
             // ----------------------------------------------------------
             if (request.method === 'DELETE') {
                 if (sessionId && sessions.has(sessionId)) {
                     const session = sessions.get(sessionId);
                     try { session?.writer.close(); } catch { }
                     sessions.delete(sessionId);
-                    return new Response(null, {
-                        status: 204,
-                        headers: corsHeaders
-                    });
                 }
-                return new Response(JSON.stringify({ error: 'Session not found' }), {
-                    status: 404,
-                    headers: { 'Content-Type': 'application/json', ...corsHeaders }
+                // Return 204 No Content whether the session was in-memory or stateless
+                return new Response(null, {
+                    status: 204,
+                    headers: corsHeaders
                 });
             }
 
