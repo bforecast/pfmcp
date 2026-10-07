@@ -55,7 +55,17 @@ node dist/index.js
 
 Connect directly to the deployed worker without `bridge.js` - just like Context7 MCP:
 
-### Claude Desktop
+### Hermes / Remote MCP Clients (Streamable HTTP)
+
+Add to your Hermes or MCP client configuration:
+
+```yaml
+mcp_servers:
+  earnings:
+    url: https://earnings-mcp-server.brilliantforecast.workers.dev/mcp
+```
+
+### Claude Desktop / Local stdio (Recommended for zero network overhead)
 
 Add to your `claude_desktop_config.json`:
 
@@ -63,8 +73,8 @@ Add to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "earnings": {
-      "url": "https://earnings-mcp-server.brilliantforecast.workers.dev/mcp",
-      "transport": "sse"
+      "command": "node",
+      "args": ["<PATH_TO_REPO>/earnings-mcp-server/dist/index.js"]
     }
   }
 }
@@ -104,9 +114,9 @@ Add to your `mcp_config.json`:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/mcp` | GET | SSE stream for server notifications |
-| `/mcp` | POST | JSON-RPC requests |
-| `/mcp` | DELETE | Close session |
+| `/mcp` | POST | JSON-RPC requests (init, tools/call, tools/list) |
+| `/mcp` | DELETE | Close session (idempotent 204) |
+| `/mcp` | GET | Returns 405 (SSE GET disabled to prevent hanging connections on serverless edge) |
 | `/health` | GET | Health check |
 | `/tools` | GET | List available tools |
 
