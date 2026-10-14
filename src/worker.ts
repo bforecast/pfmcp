@@ -540,19 +540,403 @@ function cleanupSessions() {
     }
 }
 
-// Send SSE event to a session
-async function sendSSEEvent(sessionId: string, event: string, data: any) {
-    const session = sessions.get(sessionId);
-    if (!session) return false;
+// Generate interactive HTML testing console directly from TOOLS array (Single Source of Truth)
+function generateToolsHtml(tools: typeof TOOLS): string {
+    const toolsJson = JSON.stringify(tools);
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Earnings MCP Server - Interactive Tools Console</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #38bdf8;
+            --primary-hover: #0284c7;
+            --accent: #10b981;
+            --badge-bg: #0369a1;
+            --code-bg: #090d16;
+        }
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #f8fafc;
+                --surface: #ffffff;
+                --border: #e2e8f0;
+                --text: #0f172a;
+                --text-muted: #64748b;
+                --primary: #0284c7;
+                --primary-hover: #0369a1;
+                --accent: #059669;
+                --badge-bg: #e0f2fe;
+                --code-bg: #f1f5f9;
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            padding: 2rem 1rem;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        header {
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+        }
+        h1 { font-size: 1.75rem; font-weight: 700; }
+        .badges { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 9999px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+        .badge.active { background: #064e3b; color: #6ee7b7; border-color: #059669; }
+        .sub-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+        .quick-actions {
+            margin-bottom: 2rem;
+            background: var(--surface);
+            padding: 1rem 1.25rem;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        .quick-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+        }
+        .btn-group { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        button {
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            padding: 0.5rem 0.9rem;
+            transition: all 0.15s ease;
+        }
+        .btn-quick {
+            background: var(--code-bg);
+            color: var(--primary);
+            border: 1px solid var(--border);
+        }
+        .btn-quick:hover {
+            border-color: var(--primary);
+            background: var(--surface);
+        }
+        .search-box {
+            width: 100%;
+            margin-bottom: 1.5rem;
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            font-size: 0.95rem;
+            outline: none;
+        }
+        .search-box:focus { border-color: var(--primary); }
+        .tool-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-bottom: 1.25rem;
+        }
+        .tool-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        .tool-name {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--primary);
+        }
+        .tool-desc {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+            text-transform: uppercase;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--code-bg);
+            color: var(--text);
+            font-size: 0.875rem;
+            outline: none;
+        }
+        .form-group input:focus, .form-group select:focus {
+            border-color: var(--primary);
+        }
+        .btn-exec {
+            background: var(--primary);
+            color: #ffffff;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .btn-exec:hover { background: var(--primary-hover); }
+        .btn-exec:disabled { opacity: 0.5; cursor: not-allowed; }
+        .result-box {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 350px;
+            overflow-y: auto;
+        }
+        .result-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        a { color: var(--primary); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <div class="header-top">
+            <h1>Earnings MCP Server</h1>
+            <div class="badges">
+                <span class="badge active">● Live</span>
+                <span class="badge">${tools.length} Tools (v2.0.0)</span>
+                <span class="badge">Streamable HTTP (POST /mcp)</span>
+            </div>
+        </div>
+        <div class="sub-bar">
+            <span>Interactive Web Console & Direct Tool Execution</span>
+            <div>
+                <a href="/tools?format=json" target="_blank">📄 View Raw JSON</a> &nbsp;|&nbsp;
+                <a href="/health" target="_blank">🩺 Health Check</a>
+            </div>
+        </div>
+    </header>
 
-    try {
-        const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-        await session.writer.write(session.encoder.encode(message));
-        return true;
-    } catch {
-        sessions.delete(sessionId);
-        return false;
+    <div class="quick-actions">
+        <div class="quick-title">⚡ Quick Tests (One-Click Execution)</div>
+        <div class="btn-group">
+            <button class="btn-quick" onclick="quickRun('earnings_get_stock_quote', { symbol: 'NVDA' })">⚡ NVDA Quote</button>
+            <button class="btn-quick" onclick="quickRun('earnings_get_stock_quote', { symbol: 'AAPL' })">⚡ AAPL Quote</button>
+            <button class="btn-quick" onclick="quickRun('earnings_get_stock_stats', { symbol: 'NVDA' })">⚡ NVDA Stats</button>
+            <button class="btn-quick" onclick="quickRun('earnings_get_stock_details', { symbol: 'NVDA', include_history: true, include_earnings: true })">⚡ NVDA Details</button>
+            <button class="btn-quick" onclick="quickRun('earnings_list_portfolios', { response_format: 'markdown' })">⚡ List Portfolios</button>
+            <button class="btn-quick" onclick="quickRun('earnings_get_health', {})">⚡ Backend Health</button>
+        </div>
+    </div>
+
+    <input type="text" id="search" class="search-box" placeholder="🔍 Filter tools by name or description (e.g. quote, portfolio, ai, stats)..." oninput="filterTools()">
+
+    <div id="tools-container">
+        ${tools.map(tool => {
+            const props = (tool.inputSchema as any)?.properties || {};
+            const propKeys = Object.keys(props);
+            return `
+            <div class="tool-card" id="card-${tool.name}" data-name="${tool.name.toLowerCase()}" data-desc="${(tool.description || '').toLowerCase()}">
+                <div class="tool-header">
+                    <span class="tool-name">${tool.name}</span>
+                </div>
+                <div class="tool-desc">${tool.description || ''}</div>
+                ${propKeys.length > 0 ? `
+                <div class="form-grid">
+                    ${propKeys.map(key => {
+                        const p = props[key];
+                        let defaultVal = p.default !== undefined ? p.default : '';
+                        if (key === 'symbol' && !defaultVal) defaultVal = 'NVDA';
+                        if (key === 'group_id' && !defaultVal) defaultVal = '1';
+                        
+                        if (p.enum && Array.isArray(p.enum)) {
+                            return `
+                            <div class="form-group">
+                                <label>${key}</label>
+                                <select id="field-${tool.name}-${key}">
+                                    ${p.enum.map((opt: string) => `<option value="${opt}" ${opt === defaultVal ? 'selected' : ''}>${opt}</option>`).join('')}
+                                </select>
+                            </div>`;
+                        } else if (p.type === 'boolean') {
+                            return `
+                            <div class="form-group">
+                                <label>${key}</label>
+                                <select id="field-${tool.name}-${key}">
+                                    <option value="true" ${defaultVal === true ? 'selected' : ''}>true</option>
+                                    <option value="false" ${defaultVal === false ? 'selected' : ''}>false</option>
+                                </select>
+                            </div>`;
+                        } else {
+                            return `
+                            <div class="form-group">
+                                <label>${key}${(tool.inputSchema as any)?.required?.includes(key) ? ' *' : ''}</label>
+                                <input type="${p.type === 'number' ? 'number' : 'text'}" 
+                                       id="field-${tool.name}-${key}" 
+                                       value="${defaultVal}" 
+                                       placeholder="${p.description || key}">
+                            </div>`;
+                        }
+                    }).join('')}
+                </div>` : ''}
+                <button class="btn-exec" id="btn-${tool.name}" onclick="execTool('${tool.name}')">▶ Execute Tool</button>
+                <div class="result-box" id="res-${tool.name}" style="display:none;"></div>
+            </div>`;
+        }).join('')}
+    </div>
+</div>
+
+<script>
+const TOOLS_MAP = ${toolsJson};
+
+function filterTools() {
+    const q = document.getElementById('search').value.toLowerCase().trim();
+    document.querySelectorAll('.tool-card').forEach(card => {
+        const name = card.getAttribute('data-name');
+        const desc = card.getAttribute('data-desc');
+        card.style.display = (name.includes(q) || desc.includes(q)) ? 'block' : 'none';
+    });
+}
+
+async function quickRun(name, args) {
+    for (const [k, v] of Object.entries(args)) {
+        const field = document.getElementById('field-' + name + '-' + k);
+        if (field) field.value = v;
     }
+    const card = document.getElementById('card-' + name);
+    if (card) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    await callMcp(name, args);
+}
+
+async function execTool(name) {
+    const toolDef = TOOLS_MAP.find(t => t.name === name);
+    const args = {};
+    if (toolDef && toolDef.inputSchema && toolDef.inputSchema.properties) {
+        for (const [k, p] of Object.entries(toolDef.inputSchema.properties)) {
+            const field = document.getElementById('field-' + name + '-' + k);
+            if (field) {
+                let val = field.value;
+                if (p.type === 'number') val = val === '' ? undefined : Number(val);
+                else if (p.type === 'boolean') val = val === 'true';
+                if (val !== undefined && val !== '') args[k] = val;
+            }
+        }
+    }
+    await callMcp(name, args);
+}
+
+async function callMcp(name, args) {
+    const btn = document.getElementById('btn-' + name);
+    const resBox = document.getElementById('res-' + name);
+    if (!resBox) return;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ Calling /mcp...';
+    }
+    resBox.style.display = 'block';
+    resBox.innerHTML = '<span style="color:var(--text-muted)">Sending JSON-RPC request to POST /mcp...</span>';
+
+    const startTime = performance.now();
+    try {
+        const payload = {
+            jsonrpc: '2.0',
+            method: 'tools/call',
+            params: { name, arguments: args },
+            id: Date.now()
+        };
+        const resp = await fetch('/mcp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const duration = Math.round(performance.now() - startTime);
+        const data = await resp.json();
+        
+        let output = '';
+        if (data.result && data.result.content && data.result.content[0]) {
+            output = data.result.content[0].text;
+        } else if (data.error) {
+            output = 'Error (' + data.error.code + '): ' + data.error.message;
+        } else {
+            output = JSON.stringify(data, null, 2);
+        }
+
+        resBox.innerHTML = '<div class="result-meta"><span>Status: ' + resp.status + ' OK</span><span>Duration: ' + duration + 'ms</span></div>' +
+                           '<code>' + escapeHtml(output) + '</code>';
+    } catch (err) {
+        const duration = Math.round(performance.now() - startTime);
+        resBox.innerHTML = '<div class="result-meta"><span style="color:#ef4444">Fetch Failed</span><span>' + duration + 'ms</span></div>' +
+                           '<code style="color:#ef4444">' + escapeHtml(String(err)) + '</code>';
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = '▶ Execute Tool';
+        }
+    }
+}
+
+function escapeHtml(str) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+</script>
+</body>
+</html>`;
 }
 
 export default {
@@ -567,13 +951,25 @@ export default {
             'Access-Control-Expose-Headers': 'mcp-session-id'
         };
 
+        // Cache-control headers to prevent stale schemas in browsers and edge CDN
+        const noCacheHeaders = {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+            ...corsHeaders
+        };
+
         // CORS preflight
         if (request.method === 'OPTIONS') {
             return new Response(null, { headers: corsHeaders });
         }
 
-        // Health check
+        // Health check (browser visiting root redirects to interactive /tools console)
         if (url.pathname === '/' || url.pathname === '/health') {
+            const accept = request.headers.get('accept') || '';
+            if (url.pathname === '/' && accept.includes('text/html')) {
+                return Response.redirect(`${url.origin}/tools`, 302);
+            }
             return new Response(JSON.stringify({
                 status: 'healthy',
                 server: 'earnings-mcp-server',
@@ -581,14 +977,23 @@ export default {
                 transport: 'streamable-http',
                 endpoints: { mcp: '/mcp', tools: '/tools' }
             }), {
-                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+                headers: { 'Content-Type': 'application/json', ...noCacheHeaders }
             });
         }
 
-        // List tools (convenience endpoint)
+        // List tools (Interactive Web Console for browsers, raw JSON for API callers)
         if (url.pathname === '/tools') {
+            const accept = request.headers.get('accept') || '';
+            const wantsJson = url.searchParams.get('format') === 'json' || accept.includes('application/json');
+
+            if (!wantsJson && accept.includes('text/html')) {
+                return new Response(generateToolsHtml(TOOLS), {
+                    headers: { 'Content-Type': 'text/html; charset=utf-8', ...noCacheHeaders }
+                });
+            }
+
             return new Response(JSON.stringify({ tools: TOOLS }, null, 2), {
-                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+                headers: { 'Content-Type': 'application/json; charset=utf-8', ...noCacheHeaders }
             });
         }
 
