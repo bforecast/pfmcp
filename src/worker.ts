@@ -11,6 +11,8 @@ import { getEarningsApiUrl } from './constants.js';
 interface Env {
     EARNINGS_API_URL: string;
     // Secrets
+    AUTH_USERNAME?: string;
+    AUTH_PASSWORD?: string;
     AUTH_COOKIE?: string;
     MCP_SHARED_SECRET?: string;
     // Bindings
@@ -902,6 +904,7 @@ async function callMcp(name, args) {
         };
         const resp = await fetch('/mcp', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
@@ -939,6 +942,82 @@ function escapeHtml(str) {
 </html>`;
 }
 
+// Memory cache for valid credentials (base64 -> expiry timestamp)
+const authCache = new Map<string, number>();
+
+async function verifyAuth(request: Request, env: Env): Promise<boolean> {
+    const authHeader = request.headers.get('Authorization') || '';
+    const authToken = request.headers.get('X-Auth-Token') || '';
+
+    // 1. Direct Shared Secret in X-Auth-Token
+    if (authToken && env.MCP_SHARED_SECRET && authToken === env.MCP_SHARED_SECRET) {
+        return true;
+    }
+
+    // 2. Bearer Token in Authorization header (MCP client / Agent)
+    if (authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7).trim();
+        if (env.MCP_SHARED_SECRET && token === env.MCP_SHARED_SECRET) {
+            return true;
+        }
+    }
+
+    // 3. HTTP Basic Auth (Browser / User)
+    if (authHeader.startsWith('Basic ')) {
+        const base64 = authHeader.substring(6).trim();
+
+        // Check in-memory cache (valid for 10 minutes)
+        const now = Date.now();
+        const cachedExpiry = authCache.get(base64);
+        if (cachedExpiry && cachedExpiry > now) {
+            return true;
+        }
+
+        try {
+            const decoded = atob(base64);
+            const colonIndex = decoded.indexOf(':');
+            if (colonIndex === -1) return false;
+
+            const user = decoded.substring(0, colonIndex);
+            const pass = decoded.substring(colonIndex + 1);
+
+            // A. Check against local worker secrets if configured
+            if (env.AUTH_USERNAME && env.AUTH_PASSWORD) {
+                if (user === env.AUTH_USERNAME && pass === env.AUTH_PASSWORD) {
+                    authCache.set(base64, now + 10 * 60 * 1000);
+                    return true;
+                }
+            }
+
+            // B. Check if password matches MCP_SHARED_SECRET
+            if (env.MCP_SHARED_SECRET && (pass === env.MCP_SHARED_SECRET || user === env.MCP_SHARED_SECRET)) {
+                authCache.set(base64, now + 10 * 60 * 1000);
+                return true;
+            }
+
+            // C. Verify seamlessly against earnings-worker /auth endpoint
+            const targetUrl = env.EARNINGS_API_URL || 'https://pf.bforecast.com';
+            const authResp = await fetch(`${targetUrl}/auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ username: user, password: pass }),
+                redirect: 'manual'
+            });
+
+            // On valid credentials, earnings-worker responds with 302 redirect without ?error=1
+            const location = authResp.headers.get('Location') || '';
+            if (authResp.status === 302 && !location.includes('error=')) {
+                authCache.set(base64, now + 10 * 60 * 1000);
+                return true;
+            }
+        } catch {
+            return false;
+        }
+    }
+
+    return false;
+}
+
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);
@@ -947,7 +1026,7 @@ export default {
         const corsHeaders = {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id, Authorization',
+            'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id, Authorization, X-Auth-Token',
             'Access-Control-Expose-Headers': 'mcp-session-id'
         };
 
@@ -964,14 +1043,61 @@ export default {
             return new Response(null, { headers: corsHeaders });
         }
 
-        // Health check (browser visiting root redirects to interactive /tools console)
-        if (url.pathname === '/' || url.pathname === '/health') {
+        // Public health check (unauthenticated for uptime monitors)
+        if (url.pathname === '/health') {
+            return new Response(JSON.stringify({
+                status: 'healthy',
+                server: 'earnings-mcp-server',
+                version: '2.0.0',
+                transport: 'streamable-http',
+                endpoints: { mcp: '/mcp', tools: '/tools' }
+            }), {
+                headers: { 'Content-Type': 'application/json', ...noCacheHeaders }
+            });
+        }
+
+        // Authentication enforcement (HTTP Basic Auth for browsers, Bearer/Basic for API callers)
+        const isAuthed = await verifyAuth(request, env);
+        if (!isAuthed) {
             const accept = request.headers.get('accept') || '';
-            if (url.pathname === '/' && accept.includes('text/html')) {
+            // For browsers visiting web pages, trigger native browser Basic Auth prompt
+            if (accept.includes('text/html') || url.pathname === '/tools' || url.pathname === '/') {
+                return new Response('<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;text-align:center;padding:3rem;"><h2>401 Unauthorized</h2><p>Authentication required. Please enter your earnings-worker credentials.</p></body></html>', {
+                    status: 401,
+                    headers: {
+                        'WWW-Authenticate': 'Basic realm="Earnings MCP Server", charset="UTF-8"',
+                        'Content-Type': 'text/html; charset=utf-8',
+                        ...noCacheHeaders
+                    }
+                });
+            }
+
+            // For MCP JSON-RPC callers, return 401 JSON
+            return new Response(JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32000,
+                    message: 'Unauthorized. Please provide valid credentials via HTTP Basic Auth or Authorization: Bearer <TOKEN>.'
+                },
+                id: null
+            }), {
+                status: 401,
+                headers: {
+                    'WWW-Authenticate': 'Basic realm="Earnings MCP Server", charset="UTF-8"',
+                    'Content-Type': 'application/json; charset=utf-8',
+                    ...noCacheHeaders
+                }
+            });
+        }
+
+        // Root redirect (browser visiting root redirects to interactive /tools console)
+        if (url.pathname === '/') {
+            const accept = request.headers.get('accept') || '';
+            if (accept.includes('text/html')) {
                 return Response.redirect(`${url.origin}/tools`, 302);
             }
             return new Response(JSON.stringify({
-                status: 'healthy',
+                status: 'authenticated',
                 server: 'earnings-mcp-server',
                 version: '2.0.0',
                 transport: 'streamable-http',
